@@ -12,7 +12,7 @@ pub struct AppWindow {
 }
 
 impl AppWindow {
-    pub fn new(options: &Options, window: Window, webview: WebView) -> Self {
+    pub fn new(_options: &Options, window: Window, webview: WebView) -> Self {
         Self { window, webview }
     }
 

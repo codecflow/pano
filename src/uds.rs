@@ -29,7 +29,7 @@ impl UDSListener {
         let listener =
             UnixListener::bind(&self.socket_path).map_err(|e| AppError::IpcError(e.to_string()))?;
 
-        let socket_path = self.socket_path.clone();
+        let _socket_path = self.socket_path.clone();
         thread::spawn(move || {
             for stream in listener.incoming() {
                 match stream {
