@@ -1,23 +1,8 @@
 [package]
 name = "pano"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 
 [dependencies]
-clap = "4.5.27"
-dpi = "0.1.1"
-gtk = "0.18.2"
-winit = { version = "0.30.8" }
+tao = "0.31.1"
 wry = { version = "0.48.1", features = ["transparent"] }
-x11-dl = "2.21.0"
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-
-[features]
-default = ["x11"]
-x11 = []
