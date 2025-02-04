@@ -56,8 +56,9 @@ jobs:
     - name: Upload Alpine artifact
       uses: actions/upload-artifact@v4
       with:
-        name: pano-alpine
+        name: pano-alpine-${{ github.ref_name }}
         path: target/release/pano
+
   
   release:
     runs-on: ubuntu-latest
@@ -71,12 +72,19 @@ jobs:
     - name: Download Release Asset
       uses: actions/download-artifact@v4
       with:
-        name: release-binaries
+        name: pano-alpine-${{ github.ref_name }}
         path: release/
+
+    - name: Rename file with version
+      run: |
+        cd release
+        mv pano pano-alpine-${{ github.ref_name }}
 
     - name: Release
       uses: softprops/action-gh-release@v1
       with:
         files: release/*
+        name: Release ${{ github.ref_name }}
+        tag_name: ${{ github.ref_name }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
