@@ -18,7 +18,7 @@ jobs:
       run: |
         apk update
         apk add --no-cache \
-          webkit2gtk-dev \
+          webkit2gtk-4.1-dev \
           gtk+3.0-dev \
           pango-dev \
           cairo-dev \
