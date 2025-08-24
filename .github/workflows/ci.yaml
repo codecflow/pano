@@ -1,5 +1,8 @@
 name: Build and release (linux, macos)
 
+permissions:
+  contents: write
+
 on:
   push:
     tags: ["v*.*.*"]
@@ -20,21 +23,17 @@ jobs:
           node-version: "lts/*"
       - run: npm i -g @commitlint/cli @commitlint/config-conventional commitlint-plugin-regex-match
 
-      # Lint PR title (PRs) or the latest commit message (pushes/tags)
       - name: Lint message/title
-        shell: bash
+        if: ${{ github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/') }}
         run: |
           MSG=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             MSG="${{ github.event.pull_request.title }}"
-          elif [ -n "${{ github.event.head_commit.message }}" ]; then
-            MSG="${{ github.event.head_commit.message }}"
           else
-            MSG="${{ github.ref_name }}"
+            MSG="${{ github.event.head_commit.message }}"
           fi
           echo "Linting: $MSG"
           echo "$MSG" | npx commitlint
-
   build-linux:
     name: Build (linux)
     needs: [lint_commit]
@@ -115,10 +114,13 @@ jobs:
 
   release:
     name: Create Release
-    if: startsWith(github.ref, 'refs/tags/')
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     needs: [lint_commit, build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
+      - name: Debug context
+        run: echo "event=${{ github.event_name }} ref=${{ github.ref }} ref_name=${{ github.ref_name }}"
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -127,7 +129,6 @@ jobs:
         run: |
           cd artifacts
           rm -f checksums.txt
-          # hash any zips/tarballs we produced
           find . -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print0 \
             | xargs -0 -I{} sha256sum "{}" >> checksums.txt
           cat checksums.txt
