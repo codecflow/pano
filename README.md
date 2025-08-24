@@ -22,6 +22,12 @@ cargo build --release
 # The binary will be available at target/release/pano
 ```
 
+### Docker
+
+```bash
+docker build -t pano-build --target artifact --build-arg GTK_VARIANT=gtk4 .
+```
+
 ## Usage
 
 ### Command-line Options
