@@ -3,6 +3,10 @@ name: Build and release (linux, macos)
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     tags: ["v*.*.*"]
@@ -22,7 +26,6 @@ jobs:
         with:
           node-version: "lts/*"
       - run: npm i -g @commitlint/cli @commitlint/config-conventional commitlint-plugin-regex-match
-
       - name: Lint message/title
         if: ${{ github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/') }}
         run: |
@@ -34,6 +37,7 @@ jobs:
           fi
           echo "Linting: $MSG"
           echo "$MSG" | npx commitlint
+
   build-linux:
     name: Build (linux)
     needs: [lint_commit]
@@ -60,6 +64,9 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Detect arch
+        run: echo "ARCH=$(uname -m)" >> "$GITHUB_ENV"
+
       - name: Build (release)
         run: cargo build --release --locked
 
@@ -68,12 +75,14 @@ jobs:
           mkdir -p out
           cp target/release/pano out/pano
           strip out/pano || true
-          tar -czf pano-linux-$(uname -m).tar.gz -C out pano
+          TARBALL="pano-linux-${ARCH}.tar.gz"
+          tar -czf "$TARBALL" -C out pano
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pano-linux-${{ runner.arch }}
-          path: pano-linux-$(uname -m).tar.gz
+          name: pano-linux-${{ env.ARCH }} # e.g. x86_64
+          path: ${{ env.TARBALL }}
 
   build-macos:
     name: Build (macos)
@@ -100,6 +109,7 @@ jobs:
         id: pkg
         run: |
           ARCH=$(uname -m)  # arm64 on Apple Silicon
+          echo "ARCH=$ARCH" >> "$GITHUB_ENV"
           mkdir -p out
           cp target/release/pano out/pano
           chmod +x out/pano
@@ -109,7 +119,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pano-macos-${{ runner.arch }} # typically ARM64
+          name: pano-macos-${{ env.ARCH }} # e.g. arm64
           path: ${{ steps.pkg.outputs.zip }}
 
   release:
@@ -120,7 +130,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # we need tags
+          fetch-depth: 0
 
       - name: Determine next tag (semver from conventional commits)
         id: semver
@@ -133,16 +143,13 @@ jobs:
             echo "new=v0.1.0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
           commits="$(git log --format=%B "${last_tag}"..HEAD)"
           bump=patch
           echo "$commits" | grep -E 'BREAKING CHANGE|!:' -q && bump=major || true
           if [ "$bump" = patch ]; then
             echo "$commits" | grep -E '^feat(\(|:)' -q && bump=minor || true
           fi
-
-          ver="${last_tag#v}"
-          IFS=. read -r MAJOR MINOR PATCH <<<"$ver"
+          ver="${last_tag#v}"; IFS=. read -r MAJOR MINOR PATCH <<<"$ver"
           case "$bump" in
             major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
             minor) MINOR=$((MINOR+1)); PATCH=0 ;;
@@ -152,24 +159,25 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          pattern: pano-*
           path: artifacts
+          merge-multiple: true
 
       - name: Generate checksums
         run: |
           cd artifacts
           rm -f checksums.txt
-          find . -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print0 \
-            | xargs -0 -I{} sha256sum "{}" >> checksums.txt
+          for f in *.zip *.tar.gz; do [ -f "$f" ] && sha256sum "$f" >> checksums.txt; done
           cat checksums.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.semver.outputs.new }}
-          target_commitish: ${{ github.sha }} # tag this merge commit
+          target_commitish: ${{ github.sha }}
           files: |
-            artifacts/**/*.zip
-            artifacts/**/*.tar.gz
+            artifacts/*.zip
+            artifacts/*.tar.gz
             artifacts/checksums.txt
           generate_release_notes: true
           make_latest: true
