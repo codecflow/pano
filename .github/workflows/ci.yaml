@@ -2,117 +2,132 @@ name: Build and release (linux, macos)
 
 on:
   push:
-    tags:
-      - "v*.*.*"
-    branches:
-      - main
+    tags: ["v*.*.*"]
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 jobs:
+  lint_commit:
+    name: Lint Commit Message
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+      - run: npm i -g @commitlint/cli @commitlint/config-conventional commitlint-plugin-regex-match
+
+      # Lint PR title (PRs) or the latest commit message (pushes/tags)
+      - name: Lint message/title
+        shell: bash
+        run: |
+          MSG=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            MSG="${{ github.event.pull_request.title }}"
+          elif [ -n "${{ github.event.head_commit.message }}" ]; then
+            MSG="${{ github.event.head_commit.message }}"
+          else
+            MSG="${{ github.ref_name }}"
+          fi
+          echo "Linting: $MSG"
+          echo "$MSG" | npx commitlint
+
   build-linux:
     name: Build (linux)
+    needs: [lint_commit]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - name: Install system deps (GTK3)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            libglib2.0-dev libgtk-3-dev \
+            libgdk-pixbuf2.0-dev libcairo2-dev libpango1.0-dev libatk1.0-dev \
+            libwebkit2gtk-4.0-dev libsoup2.4-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
         with:
-          toolchain: stable
-          profile: minimal
-          override: true
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build (release)
-        run: cargo build --release
+        run: cargo build --release --locked
 
-      - name: Package linux binary
+      - name: Package
         run: |
           mkdir -p out
           cp target/release/pano out/pano
           chmod +x out/pano
           tar -czf pano-linux-x86_64.tar.gz -C out pano
 
-      - name: Upload linux artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: pano-linux-x86_64
           path: pano-linux-x86_64.tar.gz
 
   build-macos:
     name: Build (macos)
+    needs: [lint_commit]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - name: Cache cargo
+        uses: actions/cache@v4
         with:
-          toolchain: stable
-          profile: minimal
-          override: true
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build (release)
-        run: cargo build --release
+        run: cargo build --release --locked
 
-      - name: Package macos binary
+      - name: Detect arch & package
+        id: pkg
         run: |
+          ARCH=$(uname -m)  # arm64 on Apple Silicon
           mkdir -p out
           cp target/release/pano out/pano
           chmod +x out/pano
-          zip -r pano-macos-x86_64.zip out/pano
+          ZIP="pano-macos-${ARCH}.zip"
+          /usr/bin/zip -r "$ZIP" out/pano
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
-      - name: Upload macos artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: pano-macos-x86_64
-          path: pano-macos-x86_64.zip
+          name: pano-macos-${{ runner.arch }} # typically ARM64
+          path: ${{ steps.pkg.outputs.zip }}
 
-  create_release:
-    name: Create GitHub Release and upload assets
+  release:
+    name: Create Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [lint_commit, build-linux, build-macos]
     runs-on: ubuntu-latest
-    needs: [build-linux, build-macos]
-    if: startsWith(github.ref, 'refs/tags/') # only run on tag pushes
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download linux artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: pano-linux-x86_64
           path: artifacts
 
-      - name: Download macos artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: pano-macos-x86_64
-          path: artifacts
+      - name: List artifacts
+        run: ls -R artifacts
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          release_name: ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-
-      - name: Upload linux asset
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: artifacts/pano-linux-x86_64.tar.gz
-          asset_name: pano-linux-x86_64.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload macos asset
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: artifacts/pano-macos-x86_64.zip
-          asset_name: pano-macos-x86_64.zip
-          asset_content_type: application/zip
+          files: artifacts/**/*
