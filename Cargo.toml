@@ -1,9 +1,9 @@
 [package]
 name = "pano"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clap = { version = "4.5.28", features = ["derive"] }
-tao = "0.31.1"
-wry = { version = "0.48.1", features = ["transparent"] }
+clap = { version = "4.5.45", features = ["derive"] }
+tao = "0.34.2"
+wry = { version = "0.53.1", features = ["transparent"] }
