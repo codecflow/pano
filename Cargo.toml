@@ -7,3 +7,8 @@ edition = "2021"
 clap = { version = "4.5.46", features = ["derive"] }
 tao = "0.34.2"
 wry = { version = "0.53.3", features = ["transparent"] }
+x11-dl = "2.21.0"
+
+[features]
+default = ["x11"]
+x11 = []

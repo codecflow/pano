@@ -1429,6 +1429,7 @@ dependencies = [
  "clap",
  "tao",
  "wry",
+ "x11-dl",
 ]
 
 [[package]]

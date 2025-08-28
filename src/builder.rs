@@ -6,6 +6,9 @@ use tao::{
 };
 use wry::{WebView, WebViewBuilder};
 
+#[cfg(feature = "x11")]
+use x11_dl::xlib::{self, Display, Visual, XVisualInfo};
+
 pub struct AppWindow {
     pub window: Window,
     pub webview: WebView,
@@ -27,6 +30,49 @@ impl AppWindow {
     pub fn move_to(&self, x: i32, y: i32) {
         self.window.set_ime_position(LogicalPosition::new(x, y));
     }
+}
+
+#[cfg(feature = "x11")]
+pub fn configure_x11_transparency() -> Result<()> {
+    use std::ptr;
+    
+    unsafe {
+        let xlib = xlib::Xlib::open().map_err(|e| AppError::WindowError(format!("Failed to open X11: {}", e)))?;
+        let display = (xlib.XOpenDisplay)(ptr::null());
+        if display.is_null() {
+            return Err(AppError::WindowError("Failed to open X11 display".to_string()));
+        }
+
+        let screen = (xlib.XDefaultScreen)(display);
+        let mut visual_info = XVisualInfo {
+            visual: ptr::null_mut(),
+            visualid: 0,
+            screen,
+            depth: 32,
+            class: 4, // TrueColor
+            red_mask: 0,
+            green_mask: 0,
+            blue_mask: 0,
+            colormap_size: 0,
+            bits_per_rgb: 0,
+        };
+
+        let mut nitems = 0;
+        let visual_list = (xlib.XGetVisualInfo)(
+            display,
+            xlib::VisualScreenMask | xlib::VisualDepthMask | xlib::VisualClassMask,
+            &mut visual_info,
+            &mut nitems,
+        );
+
+        if !visual_list.is_null() && nitems > 0 {
+            // Found 32-bit visual, transparency should work
+            (xlib.XFree)(visual_list as *mut _);
+        }
+
+        (xlib.XCloseDisplay)(display);
+    }
+    Ok(())
 }
 
 pub struct WindowFactory;

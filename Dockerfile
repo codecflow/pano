@@ -6,6 +6,8 @@ WORKDIR /app
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential pkg-config ca-certificates \
     libgdk-pixbuf2.0-dev libcairo2-dev libpango1.0-dev libatk1.0-dev \
+    libx11-dev libxext-dev libxrender-dev libxcomposite-dev \
+    xvfb xcompmgr \
     && rm -rf /var/lib/apt/lists/*
 
 # GTK / WebKit deps
