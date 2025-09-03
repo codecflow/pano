@@ -1,4 +1,3 @@
-use crate::cli::Options;
 use crate::error::{AppError, Result};
 use tao::{
     dpi::{LogicalPosition, LogicalSize},
@@ -12,12 +11,14 @@ pub struct AppWindow {
 }
 
 impl AppWindow {
-    pub fn new(_options: &Options, window: Window, webview: WebView) -> Self {
+    pub fn new(window: Window, webview: WebView) -> Self {
         Self { window, webview }
     }
 
     pub fn update_url(&self, url: &str) {
-        let _ = self.webview.load_url(url);
+        if let Err(e) = self.webview.load_url(url) {
+            eprintln!("Failed to load URL '{}': {}", url, e);
+        }
     }
 
     pub fn resize(&self, width: u32, height: u32) {
@@ -25,7 +26,7 @@ impl AppWindow {
     }
 
     pub fn move_to(&self, x: i32, y: i32) {
-        self.window.set_ime_position(LogicalPosition::new(x, y));
+        self.window.set_outer_position(LogicalPosition::new(x, y));
     }
 }
 
@@ -52,7 +53,7 @@ impl WindowFactory {
     pub fn create_webview(builder: WebViewBuilder, window: &Window) -> Result<WebView> {
         builder
             .build(window)
-            .map_err(|e| AppError::WebViewError(e.to_string()))
+            .map_err(|e| AppError::WebView(e.to_string()))
     }
 
     #[cfg(not(any(
@@ -64,9 +65,10 @@ impl WindowFactory {
     pub fn create_webview(builder: WebViewBuilder, window: &Window) -> Result<WebView> {
         use tao::platform::unix::WindowExtUnix;
         use wry::WebViewBuilderExtUnix;
-        let vbox = window.default_vbox().unwrap();
+        let vbox = window.default_vbox()
+            .ok_or_else(|| AppError::WebView("Failed to get default vbox".to_string()))?;
         builder
             .build_gtk(vbox)
-            .map_err(|e| AppError::WebViewError(e.to_string()))
+            .map_err(|e| AppError::WebView(e.to_string()))
     }
 }

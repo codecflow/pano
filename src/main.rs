@@ -22,7 +22,7 @@ fn main() -> error::Result<()> {
     let options = Options::parse();
     let (tx, rx) = channel::<Command>();
 
-    let uds = UDSListener::new(options.socket.clone());
+    let mut uds = UDSListener::new(options.socket.clone());
     uds.start(tx)?;
 
     let event_loop = EventLoop::new();
@@ -33,19 +33,22 @@ fn main() -> error::Result<()> {
         .with_inner_size(LogicalSize::new(options.width, options.height))
         .with_visible(true)
         .build(&event_loop)
-        .map_err(|e| error::AppError::WindowError(e.to_string()))?;
+        .map_err(|e| error::AppError::Window(e.to_string()))?;
 
     let builder = WebViewBuilder::new()
         .with_url(&options.url)
         .with_transparent(true);
+    
+    if options.gpu {
+        eprintln!("Warning: GPU acceleration is not supported in wry 0.53.3");
+    }
 
     let webview = WindowFactory::create_webview(builder, &window)?;
-    let app_window = AppWindow::new(&options, window, webview);
+    let app_window = AppWindow::new(window, webview);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
-        // Handle IPC commands
         if let Ok(command) = rx.try_recv() {
             match command {
                 Command::UpdateUrl(url) => app_window.update_url(&url),
