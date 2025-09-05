@@ -38,7 +38,7 @@ fn main() -> error::Result<()> {
     let builder = WebViewBuilder::new()
         .with_url(&options.url)
         .with_transparent(true);
-    
+
     if options.gpu {
         eprintln!("Warning: GPU acceleration is not supported in wry 0.53.3");
     }

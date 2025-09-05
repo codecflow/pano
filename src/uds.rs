@@ -3,9 +3,9 @@ use std::{
     os::unix::net::UnixListener,
     path::PathBuf,
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::Sender,
-        Arc,
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -24,7 +24,7 @@ pub struct UDSListener {
 
 impl UDSListener {
     pub fn new(socket_path: PathBuf) -> Self {
-        Self { 
+        Self {
             socket_path,
             thread_handle: None,
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -33,14 +33,14 @@ impl UDSListener {
 
     pub fn start(&mut self, tx: Sender<Command>) -> Result<()> {
         if self.socket_path.exists() {
-            std::fs::remove_file(&self.socket_path)
-                .map_err(|e| AppError::Ipc(e.to_string()))?;
+            std::fs::remove_file(&self.socket_path).map_err(|e| AppError::Ipc(e.to_string()))?;
         }
 
         let listener =
             UnixListener::bind(&self.socket_path).map_err(|e| AppError::Ipc(e.to_string()))?;
-        
-        listener.set_nonblocking(true)
+
+        listener
+            .set_nonblocking(true)
             .map_err(|e| AppError::Ipc(e.to_string()))?;
 
         let shutdown = self.shutdown.clone();
@@ -76,24 +76,20 @@ impl UDSListener {
 
     fn handle_command(line: &str, tx: &Sender<Command>) {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        
+
         let result = match parts.as_slice() {
             ["url", url] => tx.send(Command::UpdateUrl(url.to_string())),
-            ["resize", width, height] => {
-                match (width.parse::<u32>(), height.parse::<u32>()) {
-                    (Ok(w), Ok(h)) => tx.send(Command::Resize(w, h)),
-                    _ => return,
-                }
-            }
-            ["move", x, y] => {
-                match (x.parse::<i32>(), y.parse::<i32>()) {
-                    (Ok(x), Ok(y)) => tx.send(Command::Move(x, y)),
-                    _ => return,
-                }
-            }
+            ["resize", width, height] => match (width.parse::<u32>(), height.parse::<u32>()) {
+                (Ok(w), Ok(h)) => tx.send(Command::Resize(w, h)),
+                _ => return,
+            },
+            ["move", x, y] => match (x.parse::<i32>(), y.parse::<i32>()) {
+                (Ok(x), Ok(y)) => tx.send(Command::Move(x, y)),
+                _ => return,
+            },
             _ => return,
         };
-        
+
         if let Err(e) = result {
             eprintln!("Failed to send command: {}", e);
         }
@@ -103,14 +99,15 @@ impl UDSListener {
 impl Drop for UDSListener {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
-        
+
         if let Some(handle) = self.thread_handle.take() {
             let _ = handle.join();
         }
-        
+
         if self.socket_path.exists()
-            && let Err(e) = std::fs::remove_file(&self.socket_path) {
-                eprintln!("Failed to remove socket file: {}", e);
-            }
+            && let Err(e) = std::fs::remove_file(&self.socket_path)
+        {
+            eprintln!("Failed to remove socket file: {}", e);
+        }
     }
 }

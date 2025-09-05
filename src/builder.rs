@@ -65,7 +65,8 @@ impl WindowFactory {
     pub fn create_webview(builder: WebViewBuilder, window: &Window) -> Result<WebView> {
         use tao::platform::unix::WindowExtUnix;
         use wry::WebViewBuilderExtUnix;
-        let vbox = window.default_vbox()
+        let vbox = window
+            .default_vbox()
             .ok_or_else(|| AppError::WebView("Failed to get default vbox".to_string()))?;
         builder
             .build_gtk(vbox)

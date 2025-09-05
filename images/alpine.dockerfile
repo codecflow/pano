@@ -44,7 +44,7 @@ RUN set -eux; \
     fi
 
 # Cache dependencies
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml ./
 RUN mkdir -p src && echo "fn main(){}" > src/main.rs \
     && cargo build \
     && rm -rf src target/debug/deps/*
@@ -53,7 +53,7 @@ RUN mkdir -p src && echo "fn main(){}" > src/main.rs \
 COPY . .
 # Set environment to use dynamic linking instead of static
 ENV RUSTFLAGS="-C target-feature=-crt-static"
-RUN cargo build --locked
+RUN cargo build --release --locked
 
 # Runtime stage
 FROM alpine:latest
@@ -119,7 +119,7 @@ RUN set -eux; \
     fi
 
 # Copy binary from builder
-COPY --from=builder /app/target/debug/pano /usr/local/bin/pano
+COPY --from=builder /app/target/release/pano /usr/local/bin/pano
 
 # Set up environment for debugging and GUI
 ENV GTK_DEBUG=all \

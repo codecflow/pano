@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-binaries:
+    name: Release Binaries
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          pattern: binaries-*
+          merge-multiple: true
+
+      - name: Create release packages
+        run: |
+          mkdir -p dist
+          
+          for variant_dir in binaries-*; do
+            variant=$(echo $variant_dir | sed 's/binaries-//')
+            
+            for platform_dir in $variant_dir/linux_*; do
+              if [ -d "$platform_dir" ]; then
+                platform=$(basename $platform_dir)
+                arch=$(echo $platform | cut -d'_' -f2)
+                
+                case $arch in
+                  amd64) arch_name="x64" ;;
+                  arm64) arch_name="arm64" ;;
+                esac
+                
+                cd $platform_dir/usr/local/bin
+                tar -czf ../../../../dist/pano-$variant-${arch_name}.tar.gz pano
+                cd ../../../../
+              fi
+            done
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          for file in *.tar.gz; do
+            sha256sum "$file" > "$file.sha256"
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.workflow_run.head_branch }}
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.event.workflow_run.head_branch, 'pre') }}
+          body: |
+            ## Installation
+            
+            Download the appropriate `.tar.gz` file for your system:
+            - **glibc**: Standard Linux (Ubuntu, Debian, CentOS, etc.)
+            - **musl**: Alpine Linux and musl-based systems
+            
+            ```bash
+            # Extract and install
+            tar -xzf pano-*.tar.gz
+            mv pano ~/.local/bin/
+            ```
+
+  push-images:
+    name: Push Docker Images
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      matrix:
+        include:
+          - variant: glibc
+          - variant: musl
+    steps:
+      - name: Download image artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: image-${{ matrix.variant }}
+
+      - name: Load Docker image
+        run: docker load -i pano-${{ matrix.variant }}.tar
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push images
+        run: |
+          # Get the tag name from the workflow run
+          TAG_NAME=${{ github.event.workflow_run.head_branch }}
+          
+          # Tag the loaded image with proper registry tags
+          docker tag pano-${{ matrix.variant }}:latest ghcr.io/${{ github.repository }}:${TAG_NAME}-${{ matrix.variant }}
+          docker tag pano-${{ matrix.variant }}:latest ghcr.io/${{ github.repository }}:latest-${{ matrix.variant }}
+          
+          # Push both tags
+          docker push ghcr.io/${{ github.repository }}:${TAG_NAME}-${{ matrix.variant }}
+          docker push ghcr.io/${{ github.repository }}:latest-${{ matrix.variant }}
