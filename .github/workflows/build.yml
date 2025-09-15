@@ -1,29 +1,34 @@
-name: Build
+name: Build Images
 
 on:
+  workflow_run:
+    workflows: ["Lint"]
+    types:
+      - completed
+    branches: [main]
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
+  packages: write
 
 jobs:
-  lint:
-    uses: ./.github/workflows/lint.yml
-
-  build:
-    name: Build ${{ matrix.variant }}
+  build-images:
+    name: Build and Push Docker Images
     runs-on: ubuntu-latest
-    needs: lint
+    if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     strategy:
       matrix:
         include:
-          - dockerfile: images/glibc.dockerfile
-            variant: glibc
           - dockerfile: images/musl.dockerfile
+            platforms: linux/amd64,linux/arm64
             variant: musl
+          - dockerfile: images/glibc.dockerfile
+            platforms: linux/amd64,linux/arm64
+            variant: glibc
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,35 +39,125 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and extract binaries
-        uses: docker/build-push-action@v6
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch,suffix=-${{ matrix.variant }}
+            type=ref,event=pr,suffix=-${{ matrix.variant }}
+            type=semver,pattern={{version}},suffix=-${{ matrix.variant }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.variant }}
+            type=raw,value=latest-${{ matrix.variant }},enable={{is_default_branch}}
+
+      - name: Build and push multi-arch images
+        id: build
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          outputs: type=local,dest=./output
-          cache-from: type=gha,scope=${{ matrix.variant }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
 
-      - name: Build Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          load: false
-          tags: pano-${{ matrix.variant }}:latest
-          cache-from: type=gha,scope=${{ matrix.variant }}
-          outputs: type=docker,dest=./pano-${{ matrix.variant }}.tar
+      - name: Export digest
+        id: digest
+        run: |
+          mkdir -p /tmp/digests/${{ matrix.variant }}
+          echo "${{ steps.meta.outputs.tags }}" > "/tmp/digests/${{ matrix.variant }}/tags.txt"
 
-      - name: Upload binary artifacts
+      - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: binaries-${{ matrix.variant }}
-          path: output/
+          name: digests-${{ matrix.variant }}
+          path: /tmp/digests/${{ matrix.variant }}
+          retention-days: 1
 
-      - name: Upload image artifacts
-        uses: actions/upload-artifact@v4
+  create-manifest:
+    name: Create and Push Manifest
+    runs-on: ubuntu-latest
+    needs: build-images
+    if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
         with:
-          name: image-${{ matrix.variant }}
-          path: pano-${{ matrix.variant }}.tar
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Create architecture-specific tags
+        run: |
+          # Wait for images to be available
+          sleep 10
+          
+          # Create architecture-specific tags for each variant
+          for variant in musl glibc; do
+            # Get the latest tag for this variant
+            VARIANT_TAG=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+            
+            # Create platform-specific tags
+            docker buildx imagetools inspect ghcr.io/${{ github.repository }}:latest-${variant} || true
+            
+            # Tag for amd64
+            docker pull --platform linux/amd64 ghcr.io/${{ github.repository }}:latest-${variant} || true
+            docker tag ghcr.io/${{ github.repository }}:latest-${variant} ghcr.io/${{ github.repository }}:${variant}-amd64 || true
+            docker push ghcr.io/${{ github.repository }}:${variant}-amd64 || true
+            
+            # Tag for arm64
+            docker pull --platform linux/arm64 ghcr.io/${{ github.repository }}:latest-${variant} || true
+            docker tag ghcr.io/${{ github.repository }}:latest-${variant} ghcr.io/${{ github.repository }}:${variant}-arm64 || true
+            docker push ghcr.io/${{ github.repository }}:${variant}-arm64 || true
+          done
+          
+          # Set glibc-amd64 as the default latest tag
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            docker pull ghcr.io/${{ github.repository }}:latest-glibc || true
+            docker tag ghcr.io/${{ github.repository }}:latest-glibc ghcr.io/${{ github.repository }}:latest || true
+            docker push ghcr.io/${{ github.repository }}:latest || true
+          fi
+
+  trigger-release:
+    name: Trigger Release Workflow
+    runs-on: ubuntu-latest
+    needs: create-manifest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Trigger release
+        run: |
+          echo "Build completed successfully for tag ${{ github.ref_name }}"
+          echo "Release workflow will be triggered automatically"

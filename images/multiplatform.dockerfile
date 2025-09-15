@@ -1,5 +1,22 @@
-FROM rust:alpine AS builder
+# Multi-platform Dockerfile based on Alpine
+FROM --platform=$BUILDPLATFORM rust:alpine AS builder
 WORKDIR /app
+
+# Build arguments for cross-compilation
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
+
+# Set Rust target based on platform
+RUN case "${TARGETARCH}" in \
+    "amd64") echo "x86_64-unknown-linux-musl" > /tmp/rust_target ;; \
+    "arm64") echo "aarch64-unknown-linux-musl" > /tmp/rust_target ;; \
+    *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
+    esac && \
+    RUST_TARGET=$(cat /tmp/rust_target) && \
+    echo "Building for ${RUST_TARGET}" && \
+    rustup target add ${RUST_TARGET}
 
 # Install build dependencies for Alpine
 RUN apk add --no-cache \
@@ -31,15 +48,23 @@ RUN apk add --no-cache \
     webkit2gtk-4.1-dev \
     libsoup3-dev
 
+# Install cross-compilation tools if needed
+RUN if [ "${TARGETARCH}" = "arm64" ] && [ "${BUILDPLATFORM}" != "linux/arm64" ]; then \
+        apk add --no-cache gcc-aarch64-none-elf; \
+    fi
+
 # Cache dependencies
 COPY Cargo.toml ./
-RUN mkdir -p src && echo "fn main(){}" > src/main.rs \
-    && cargo build --release \
-    && rm -rf src target/debug/deps/*
+RUN mkdir -p src && echo "fn main(){}" > src/main.rs && \
+    RUST_TARGET=$(cat /tmp/rust_target) && \
+    cargo build --target ${RUST_TARGET} --release && \
+    rm -rf src target/${RUST_TARGET}/release/deps/*
 
 # Build application
 COPY . .
-RUN cargo build --release
+RUN RUST_TARGET=$(cat /tmp/rust_target) && \
+    cargo build --target ${RUST_TARGET} --release && \
+    cp target/${RUST_TARGET}/release/pano /app/pano
 
 # Runtime stage
 FROM alpine:latest
@@ -86,7 +111,7 @@ RUN apk add --no-cache \
     libsoup3
 
 # Copy binary from builder
-COPY --from=builder /app/target/release/pano /usr/local/bin/pano
+COPY --from=builder /app/pano /usr/local/bin/pano
 
 # Set up NVIDIA GPU acceleration environment
 ENV LIBGL_ALWAYS_INDIRECT=0 \
@@ -97,4 +122,3 @@ ENV LIBGL_ALWAYS_INDIRECT=0 \
 # Initialize D-Bus and create machine-id
 RUN dbus-uuidgen > /etc/machine-id
 
-CMD ["pano"]
